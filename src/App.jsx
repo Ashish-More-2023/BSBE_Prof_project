@@ -8,6 +8,9 @@ import Lab from "./components/Lab";
 import Teaching from "./components/Teaching";
 import Resume from "./components/Resume";
 import PublicationsPage from "./components/PublicationsPage";
+import PatentsPage from "./components/PatentsPage";
+import Outreach from "./components/Outreach";
+import ComputationalTools from "./components/ComputationalTools";
 
 function App() {
   return (
@@ -22,6 +25,9 @@ function App() {
             <Route path="/teaching" element={<Teaching />} />
             <Route path="/resume" element={<Resume />} />
             <Route path="/publications" element={<PublicationsPage />} />
+            <Route path="/patents" element={<PatentsPage />} />
+            <Route path="/outreach" element={<Outreach />} />
+            <Route path="/computational-tools" element={<ComputationalTools />} />
           </Routes>
         </main>
         <Footer />
