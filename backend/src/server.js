@@ -19,26 +19,8 @@ const isProduction = process.env.NODE_ENV === 'production';
 const start = async () => {
   const app = express();
 
-  // Trust proxy for production
-  if (isProduction) {
-    app.set('trust proxy', 1);
-  }
-
-  // CORS Configuration
-  const allowedOrigins = isProduction
-    ? [process.env.FRONTEND_URL, process.env.ADMIN_URL]
-    : ['http://localhost:5173', 'http://localhost:3000'];
-
-  app.use(cors({
-    origin: function(origin, callback) {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.indexOf(origin) === -1) {
-        return callback(new Error('Not allowed by CORS'), false);
-      }
-      return callback(null, true);
-    },
-    credentials: true
-  }));
+  // Trust proxy (CRITICAL for Render/Railway/Heroku)
+  app.set('trust proxy', 1);
 
   // Body parser
   app.use(express.json());
@@ -48,9 +30,62 @@ const start = async () => {
   app.use(express.static(path.join(__dirname, '../public')));
   app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
+  // CORS Configuration - Environment variable controlled
+  const setupCORS = () => {
+    // Allow all origins if flag is set
+    if (process.env.ALLOW_ALL_ORIGINS === 'true') {
+      return cors({
+        origin: true,
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
+      });
+    }
+
+    // Specific origins
+    const allowedOrigins = [];
+    
+    if (process.env.FRONTEND_URL) {
+      allowedOrigins.push(...process.env.FRONTEND_URL.split(',').map(url => url.trim()));
+    }
+    
+    if (process.env.BACKEND_URL) {
+      allowedOrigins.push(process.env.BACKEND_URL);
+    }
+    
+    // Always allow localhost in development
+    if (!isProduction) {
+      allowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
+    }
+
+    return cors({
+      origin: function(origin, callback) {
+        // Allow requests with no origin (Postman, mobile apps, server-to-server)
+        if (!origin) {
+          return callback(null, true);
+        }
+        
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        
+        console.log('Blocked origin:', origin);
+        console.log('Allowed origins:', allowedOrigins);
+        
+        // Deny silently (don't throw error to avoid double response)
+        callback(null, false);
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
+    });
+  };
+
+  app.use(setupCORS());
+
   // Health check endpoint
   app.get('/health', (req, res) => {
-    res.json({ 
+    return res.json({ 
       status: 'ok', 
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'development'
@@ -69,16 +104,18 @@ const start = async () => {
   });
 
   // Session configuration
-  const sessionStore = session({
+  const sessionConfig = {
     secret: process.env.SESSION_SECRET || 'change-this-secret-in-production',
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
       maxAge: 1000 * 60 * 60 * 24, // 24 hours
-    }
-  });
+    },
+    name: 'adminjs-session'
+  };
 
   // Authentication
   const authenticate = async (email, password) => {
@@ -103,7 +140,7 @@ const start = async () => {
       cookiePassword: process.env.SESSION_SECRET || 'change-this-secret-in-production',
     },
     null,
-    sessionStore
+    sessionConfig
   );
 
   // Mount AdminJS router
@@ -116,19 +153,17 @@ const start = async () => {
         return res.status(400).json({ error: 'No file uploaded' });
       }
       
-      const baseUrl = isProduction 
-        ? process.env.BACKEND_URL 
-        : `${req.protocol}://${req.get('host')}`;
-      
+      const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host')}`;
       const imageUrl = `${baseUrl}/uploads/${req.file.filename}`;
-      res.json({ 
+      
+      return res.json({ 
         success: true,
         filename: req.file.filename,
         url: imageUrl 
       });
     } catch (error) {
       console.error('Upload error:', error);
-      res.status(500).json({ error: 'Failed to upload image' });
+      return res.status(500).json({ error: 'Failed to upload image' });
     }
   });
 
@@ -138,10 +173,10 @@ const start = async () => {
   app.get('/api/hero', async (req, res) => {
     try {
       const hero = await prisma.hero.findFirst();
-      res.json(hero || {});
+      return res.json(hero || {});
     } catch (error) {
       console.error('Hero fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch hero data' });
+      return res.status(500).json({ error: 'Failed to fetch hero data' });
     }
   });
 
@@ -149,10 +184,10 @@ const start = async () => {
   app.get('/api/about', async (req, res) => {
     try {
       const about = await prisma.about.findFirst();
-      res.json(about || {});
+      return res.json(about || {});
     } catch (error) {
       console.error('About fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch about data' });
+      return res.status(500).json({ error: 'Failed to fetch about data' });
     }
   });
 
@@ -163,10 +198,10 @@ const start = async () => {
         where: { isVisible: true },
         orderBy: [{ year: 'desc' }, { order: 'asc' }]
       });
-      res.json(publications);
+      return res.json(publications);
     } catch (error) {
       console.error('Publications fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch publications' });
+      return res.status(500).json({ error: 'Failed to fetch publications' });
     }
   });
 
@@ -177,10 +212,10 @@ const start = async () => {
         where: { isVisible: true },
         orderBy: { order: 'asc' }
       });
-      res.json(news);
+      return res.json(news);
     } catch (error) {
       console.error('News fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch news' });
+      return res.status(500).json({ error: 'Failed to fetch news' });
     }
   });
 
@@ -196,10 +231,10 @@ const start = async () => {
         },
         orderBy: { order: 'asc' }
       });
-      res.json(research);
+      return res.json(research);
     } catch (error) {
       console.error('Research fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch research data' });
+      return res.status(500).json({ error: 'Failed to fetch research data' });
     }
   });
 
@@ -215,10 +250,10 @@ const start = async () => {
         },
         orderBy: { order: 'asc' }
       });
-      res.json(departments);
+      return res.json(departments);
     } catch (error) {
       console.error('Teaching fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch teaching data' });
+      return res.status(500).json({ error: 'Failed to fetch teaching data' });
     }
   });
 
@@ -249,7 +284,7 @@ const start = async () => {
         })
       ]);
 
-      res.json({
+      return res.json({
         profile,
         education,
         positions,
@@ -261,7 +296,7 @@ const start = async () => {
       });
     } catch (error) {
       console.error('Resume fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch resume data' });
+      return res.status(500).json({ error: 'Failed to fetch resume data' });
     }
   });
 
@@ -295,7 +330,7 @@ const start = async () => {
         prisma.btechStudent.findMany({ orderBy: { order: 'asc' } })
       ]);
 
-      res.json({
+      return res.json({
         profile,
         carouselImages,
         projects,
@@ -306,7 +341,7 @@ const start = async () => {
       });
     } catch (error) {
       console.error('Lab fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch lab data' });
+      return res.status(500).json({ error: 'Failed to fetch lab data' });
     }
   });
 
@@ -322,10 +357,10 @@ const start = async () => {
         prisma.bookChapter.findMany({ orderBy: { order: 'asc' } })
       ]);
 
-      res.json({ publications, books, bookChapters });
+      return res.json({ publications, books, bookChapters });
     } catch (error) {
       console.error('Publications page fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch publications data' });
+      return res.status(500).json({ error: 'Failed to fetch publications data' });
     }
   });
 
@@ -343,10 +378,10 @@ const start = async () => {
         })
       ]);
 
-      res.json({ internationalPatents, indianPatents });
+      return res.json({ internationalPatents, indianPatents });
     } catch (error) {
       console.error('Patents page fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch patents data' });
+      return res.status(500).json({ error: 'Failed to fetch patents data' });
     }
   });
 
@@ -356,10 +391,10 @@ const start = async () => {
       const tools = await prisma.computationalTool.findMany({
         orderBy: { order: 'asc' }
       });
-      res.json(tools);
+      return res.json(tools);
     } catch (error) {
       console.error('Computational tools fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch computational tools' });
+      return res.status(500).json({ error: 'Failed to fetch computational tools' });
     }
   });
 
@@ -367,10 +402,10 @@ const start = async () => {
   app.get('/api/site-settings', async (req, res) => {
     try {
       const settings = await prisma.siteSettings.findFirst();
-      res.json(settings || {});
+      return res.json(settings || {});
     } catch (error) {
       console.error('Site settings fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch site settings' });
+      return res.status(500).json({ error: 'Failed to fetch site settings' });
     }
   });
 
@@ -381,47 +416,63 @@ const start = async () => {
         where: { isVisible: true },
         orderBy: { order: 'asc' }
       });
-      res.json(outreach);
+      return res.json(outreach);
     } catch (error) {
       console.error('Outreach fetch error:', error);
-      res.status(500).json({ error: 'Failed to fetch outreach data' });
+      return res.status(500).json({ error: 'Failed to fetch outreach data' });
     }
   });
 
   // Root endpoint
   app.get('/', (req, res) => {
-    res.json({ 
+    return res.json({ 
       status: 'running',
       environment: process.env.NODE_ENV || 'development',
-      admin: `${req.protocol}://${req.get('host')}/admin`,
-      uploadPage: `${req.protocol}://${req.get('host')}/upload.html`
+      admin: '/admin',
+      uploadPage: '/upload.html'
     });
   });
 
   // Error handling middleware
   app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ 
+    // Don't send response if headers already sent
+    if (res.headersSent) {
+      return next(err);
+    }
+    
+    console.error('Error:', err.message);
+    return res.status(500).json({ 
       error: isProduction ? 'Internal server error' : err.message 
     });
   });
 
   // 404 handler
   app.use((req, res) => {
-    res.status(404).json({ error: 'Not found' });
+    if (res.headersSent) {
+      return;
+    }
+    return res.status(404).json({ error: 'Not found' });
   });
 
   // Start server
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`Admin panel: http://localhost:${PORT}/admin`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`Upload page: http://localhost:${PORT}/upload.html`);
+    if (!isProduction) {
+      console.log(`Admin panel: http://localhost:${PORT}/admin`);
+      console.log(`Upload page: http://localhost:${PORT}/upload.html`);
+    }
   });
 
   // Graceful shutdown
   process.on('SIGTERM', async () => {
     console.log('SIGTERM received: closing server');
+    await prisma.$disconnect();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    console.log('SIGINT received: closing server');
     await prisma.$disconnect();
     process.exit(0);
   });
