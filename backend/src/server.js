@@ -22,17 +22,12 @@ const start = async () => {
   // Trust proxy (CRITICAL for Render/Railway/Heroku)
   app.set('trust proxy', 1);
 
-  // Body parser
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
-
-  // Serve static files
+  // Serve static files FIRST
   app.use(express.static(path.join(__dirname, '../public')));
   app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
   // CORS Configuration - Environment variable controlled
   const setupCORS = () => {
-    // Allow all origins if flag is set
     if (process.env.ALLOW_ALL_ORIGINS === 'true') {
       return cors({
         origin: true,
@@ -42,7 +37,6 @@ const start = async () => {
       });
     }
 
-    // Specific origins
     const allowedOrigins = [];
     
     if (process.env.FRONTEND_URL) {
@@ -53,14 +47,12 @@ const start = async () => {
       allowedOrigins.push(process.env.BACKEND_URL);
     }
     
-    // Always allow localhost in development
     if (!isProduction) {
       allowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
     }
 
     return cors({
       origin: function(origin, callback) {
-        // Allow requests with no origin (Postman, mobile apps, server-to-server)
         if (!origin) {
           return callback(null, true);
         }
@@ -71,8 +63,6 @@ const start = async () => {
         
         console.log('Blocked origin:', origin);
         console.log('Allowed origins:', allowedOrigins);
-        
-        // Deny silently (don't throw error to avoid double response)
         callback(null, false);
       },
       credentials: true,
@@ -92,7 +82,7 @@ const start = async () => {
     });
   });
 
-  // AdminJS setup
+  // AdminJS setup BEFORE body parser
   const admin = new AdminJS({
     resources,
     rootPath: '/admin',
@@ -112,7 +102,7 @@ const start = async () => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? 'none' : 'lax',
-      maxAge: 1000 * 60 * 60 * 24, // 24 hours
+      maxAge: 1000 * 60 * 60 * 24,
     },
     name: 'adminjs-session'
   };
@@ -146,6 +136,10 @@ const start = async () => {
   // Mount AdminJS router
   app.use(admin.options.rootPath, adminRouter);
 
+  // Body parser AFTER AdminJS
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+
   // Image Upload Endpoint
   app.post('/api/upload', upload.single('image'), (req, res) => {
     try {
@@ -169,7 +163,6 @@ const start = async () => {
 
   // API Routes for Frontend
   
-  // Get Hero data
   app.get('/api/hero', async (req, res) => {
     try {
       const hero = await prisma.hero.findFirst();
@@ -180,7 +173,6 @@ const start = async () => {
     }
   });
 
-  // Get About data
   app.get('/api/about', async (req, res) => {
     try {
       const about = await prisma.about.findFirst();
@@ -191,7 +183,6 @@ const start = async () => {
     }
   });
 
-  // Get Publications
   app.get('/api/publications', async (req, res) => {
     try {
       const publications = await prisma.publication.findMany({
@@ -205,7 +196,6 @@ const start = async () => {
     }
   });
 
-  // Get News
   app.get('/api/news', async (req, res) => {
     try {
       const news = await prisma.news.findMany({
@@ -219,7 +209,6 @@ const start = async () => {
     }
   });
 
-  // Get Research data
   app.get('/api/research', async (req, res) => {
     try {
       const research = await prisma.research.findMany({
@@ -238,7 +227,6 @@ const start = async () => {
     }
   });
 
-  // Get Teaching data
   app.get('/api/teaching', async (req, res) => {
     try {
       const departments = await prisma.teachingDepartment.findMany({
@@ -257,7 +245,6 @@ const start = async () => {
     }
   });
 
-  // Get Resume data
   app.get('/api/resume', async (req, res) => {
     try {
       const [
@@ -300,7 +287,6 @@ const start = async () => {
     }
   });
 
-  // Get Lab data
   app.get('/api/lab', async (req, res) => {
     try {
       const [
@@ -345,7 +331,6 @@ const start = async () => {
     }
   });
 
-  // Get Publications page data
   app.get('/api/publications-page', async (req, res) => {
     try {
       const [publications, books, bookChapters] = await Promise.all([
@@ -364,7 +349,6 @@ const start = async () => {
     }
   });
 
-  // Get Patents page data
   app.get('/api/patents-page', async (req, res) => {
     try {
       const [internationalPatents, indianPatents] = await Promise.all([
@@ -385,7 +369,6 @@ const start = async () => {
     }
   });
 
-  // Get Computational Tools
   app.get('/api/computational-tools', async (req, res) => {
     try {
       const tools = await prisma.computationalTool.findMany({
@@ -398,7 +381,6 @@ const start = async () => {
     }
   });
 
-  // Get Site Settings
   app.get('/api/site-settings', async (req, res) => {
     try {
       const settings = await prisma.siteSettings.findFirst();
@@ -409,7 +391,6 @@ const start = async () => {
     }
   });
 
-  // Get Outreach data
   app.get('/api/outreach', async (req, res) => {
     try {
       const outreach = await prisma.outreach.findMany({
@@ -435,7 +416,6 @@ const start = async () => {
 
   // Error handling middleware
   app.use((err, req, res, next) => {
-    // Don't send response if headers already sent
     if (res.headersSent) {
       return next(err);
     }
