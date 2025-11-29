@@ -9,6 +9,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { prisma, resources } from './admin/admin.config.js';
 import { upload } from './middleware/upload.js';
+import { excelUpload } from './middleware/excelUpload.js';
+import xlsx from 'xlsx';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -334,7 +337,7 @@ const start = async () => {
   app.get('/api/publications-page', async (req, res) => {
     try {
       const [publications, books, bookChapters] = await Promise.all([
-        prisma.publication.findMany({
+        prisma.publicationPage.findMany({
           where: { isVisible: true },
           orderBy: [{ year: 'desc' }, { order: 'asc' }]
         }),
@@ -390,6 +393,86 @@ const start = async () => {
       return res.status(500).json({ error: 'Failed to fetch site settings' });
     }
   });
+
+// Bulk Publication Upload from Excel/CSV
+app.post('/api/publications/bulk-upload', excelUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const workbook = xlsx.readFile(req.file.path);
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const data = xlsx.utils.sheet_to_json(worksheet);
+
+    if (data.length === 0) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Excel file is empty' });
+    }
+
+    const requiredColumns = ['title', 'authors', 'venue', 'year', 'doi', 'publisher'];
+    const firstRow = data[0];
+    const missingColumns = requiredColumns.filter(col => !(col in firstRow));
+    
+    if (missingColumns.length > 0) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ 
+        error: `Missing required columns: ${missingColumns.join(', ')}`,
+        hint: 'Required columns: title, authors, venue, year, doi, publisher'
+      });
+    }
+
+    const results = {
+      success: 0,
+      failed: 0,
+      errors: []
+    };
+
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i];
+      try {
+        // Changed from prisma.publication to prisma.publicationPage
+        await prisma.publicationPage.create({
+          data: {
+            title: String(row.title || '').trim(),
+            authors: String(row.authors || '').trim(),
+            venue: String(row.venue || '').trim(),
+            year: parseInt(row.year) || new Date().getFullYear(),
+            doi: String(row.doi || '').trim(),
+            publisher: String(row.publisher || '').trim(),
+            order: parseInt(row.order) || i,
+            isVisible: row.isVisible === false ? false : true
+          }
+        });
+        results.success++;
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          row: i + 2,
+          error: error.message
+        });
+      }
+    }
+
+    fs.unlinkSync(req.file.path);
+
+    return res.json({
+      message: 'Bulk upload completed',
+      results: results,
+      total: data.length
+    });
+
+  } catch (error) {
+    console.error('Bulk upload error:', error);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    return res.status(500).json({ error: 'Failed to process file: ' + error.message });
+  }
+});
+
+
 
   app.get('/api/outreach', async (req, res) => {
     try {
